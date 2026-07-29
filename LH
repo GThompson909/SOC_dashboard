@@ -2,27 +2,23 @@
   "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "_comment": "Azure Lighthouse delegation for Panopticon. Deployed at SUBSCRIPTION scope (registration definitions are only allowed at subscription scope); the access grant is scoped down to a single resource group via the nested deployment below. Grants Evalian's managing tenant read-only (Log Analytics Reader) access to the Sentinel / Log Analytics workspace in that resource group. Contains no secrets."
+    "_comment": "Azure Lighthouse delegation for Panopticon. Deployed at SUBSCRIPTION scope, and the access grant is now scoped to the whole subscription rather than a single resource group. RG scoping was tried first and failed silently: the customer names ONE resource group, and with the newer Microsoft.SentinelPlatformServices onboarding the Log Analytics workspace does NOT land in the same RG as the Sentinel resource, so the deployment reported Succeeded while the workspace stayed unreadable (403 InsufficientAccessError on api.loganalytics.io). Subscription scope removes that failure mode and covers workspaces the customer adds later. The grant is still read-only (Log Analytics Reader) — what widened is WHICH workspaces we can read, not what we can do to them. Contains no secrets."
   },
   "parameters": {
     "mspOfferName": {
       "type": "string",
       "defaultValue": "Panopticon SOC — Sentinel read access",
-      "metadata": { "description": "Name shown to the customer for this delegation in their Service providers blade." }
+      "metadata": { "description": "Name shown to the customer for this delegation in their Service providers blade. The registration definition's id is derived from this name, so changing it creates a SEPARATE delegation rather than updating this one." }
     },
     "mspOfferDescription": {
       "type": "string",
-      "defaultValue": "Grants the Panopticon security portal read-only access to this workspace's Microsoft Sentinel / Log Analytics data.",
+      "defaultValue": "Grants the Panopticon security portal read-only access to this subscription's Microsoft Sentinel / Log Analytics data.",
       "metadata": { "description": "Description shown to the customer." }
     },
     "managedByTenantId": {
       "type": "string",
       "defaultValue": "770efa30-4160-4959-95ae-53298070a3a6",
       "metadata": { "description": "Evalian's (the managing/MSP) Entra tenant id." }
-    },
-    "rgName": {
-      "type": "string",
-      "metadata": { "description": "Name of the resource group that contains the Microsoft Sentinel / Log Analytics workspace to delegate. The delegation is scoped to this RG only." }
     },
     "authorizations": {
       "type": "array",
@@ -53,30 +49,14 @@
       }
     },
     {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2020-06-01",
-      "name": "rgAssignment",
-      "resourceGroup": "[parameters('rgName')]",
+      "type": "Microsoft.ManagedServices/registrationAssignments",
+      "apiVersion": "2019-06-01",
+      "name": "[variables('mspAssignmentName')]",
       "dependsOn": [
-        "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+        "[extensionResourceId(subscription().id, 'Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
       ],
       "properties": {
-        "mode": "Incremental",
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "parameters": {},
-          "resources": [
-            {
-              "type": "Microsoft.ManagedServices/registrationAssignments",
-              "apiVersion": "2019-06-01",
-              "name": "[variables('mspAssignmentName')]",
-              "properties": {
-                "registrationDefinitionId": "[extensionResourceId(subscription().id, 'Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
-              }
-            }
-          ]
-        }
+        "registrationDefinitionId": "[extensionResourceId(subscription().id, 'Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
       }
     }
   ],
