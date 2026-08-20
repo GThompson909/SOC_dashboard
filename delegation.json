@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_comment": "Azure Lighthouse delegation for Panopticon. Deployed at SUBSCRIPTION scope, and the access grant is scoped to the whole subscription rather than a single resource group. RG scoping was tried first and failed silently: the customer names ONE resource group, and with the newer Microsoft.SentinelPlatformServices onboarding the Log Analytics workspace does NOT land in the same RG as the Sentinel resource, so the deployment reported Succeeded while the workspace stayed unreadable (403 InsufficientAccessError on api.loganalytics.io). Subscription scope removes that failure mode and covers workspaces the customer adds later. Contains no secrets. NOTE: this is no longer a read-only delegation — the second authorization (Microsoft Sentinel Responder) lets the portal CREATE an incident in the customer's workspace, which is how a customer-raised incident now enters the SOC (see docs/panopticon-conventions.md §44). Do NOT change mspOfferName: the registration definition's id is derived from it, so an edited name deploys a SECOND delegation and leaves this one in place, whereas an unchanged name updates it and picks up the new authorization."
+  },
+  "parameters": {
+    "mspOfferName": {
+      "type": "string",
+      "defaultValue": "Panopticon SOC — Sentinel read access",
+      "metadata": { "description": "Name shown to the customer for this delegation in their Service providers blade. The registration definition's id is derived from this name, so changing it creates a SEPARATE delegation rather than updating this one." }
+    },
+    "mspOfferDescription": {
+      "type": "string",
+      "defaultValue": "Grants the Panopticon security portal read access to this subscription's Microsoft Sentinel / Log Analytics data, and lets it raise an incident in Microsoft Sentinel on your behalf when someone reports one from the portal.",
+      "metadata": { "description": "Description shown to the customer." }
+    },
+    "managedByTenantId": {
+      "type": "string",
+      "defaultValue": "770efa30-4160-4959-95ae-53298070a3a6",
+      "metadata": { "description": "Evalian's (the managing/MSP) Entra tenant id." }
+    },
+    "authorizations": {
+      "type": "array",
+      "defaultValue": [
+        {
+          "principalId": "3ad07035-3ee4-4c4c-a8e8-0e5194150666",
+          "roleDefinitionId": "73c42c96-874c-492b-b04d-ab87d138a893",
+          "principalIdDisplayName": "Panopticon Sentinel Reader"
+        },
+        {
+          "principalId": "3ad07035-3ee4-4c4c-a8e8-0e5194150666",
+          "roleDefinitionId": "3e150937-b8fe-4cfb-8069-0eaf05df1b1f",
+          "principalIdDisplayName": "Panopticon Sentinel Responder"
+        }
+      ],
+      "metadata": { "description": "principalId = object id of the Sentinel service principal (delegating to the SP directly for now; switch to a security group later so principals rotate without a customer redeploy). Get the object id with: az ad sp show --id 59dccc26-2f9b-477c-a7b8-c7ed3f50a19d --query id -o tsv. TWO roles, both needed, neither sufficient alone: 73c42c96 = Log Analytics Reader, which carries the KQL data-plane query actions every dashboard tile runs through LogsQueryClient (and, via its */read, the ARM reads too). 3e150937 = Microsoft Sentinel Responder, the least-privilege built-in role carrying Microsoft.SecurityInsights/incidents/write — the one action needed to raise an incident. Sentinel Contributor (ab8e14d6) also carries it but adds analytics-rule and playbook authoring, which the portal never does. Responder declares no DataActions, so Lighthouse will delegate it (it refuses Owner and any role with DataActions). A customer still on the single-authorization version of this template gets a 403 on the ARM write, which the portal reports as 'the delegation needs redeploying' rather than as a failed raise." }
+    }
+  },
+  "variables": {
+    "mspRegistrationName": "[guid(parameters('mspOfferName'))]",
+    "mspAssignmentName": "[guid(parameters('mspOfferName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedServices/registrationDefinitions",
+      "apiVersion": "2019-06-01",
+      "name": "[variables('mspRegistrationName')]",
+      "properties": {
+        "registrationDefinitionName": "[parameters('mspOfferName')]",
+        "description": "[parameters('mspOfferDescription')]",
+        "managedByTenantId": "[parameters('managedByTenantId')]",
+        "authorizations": "[parameters('authorizations')]"
+      }
+    },
+    {
+      "type": "Microsoft.ManagedServices/registrationAssignments",
+      "apiVersion": "2019-06-01",
+      "name": "[variables('mspAssignmentName')]",
+      "dependsOn": [
+        "[extensionResourceId(subscription().id, 'Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+      ],
+      "properties": {
+        "registrationDefinitionId": "[extensionResourceId(subscription().id, 'Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+      }
+    }
+  ],
+  "outputs": {
+    "mspOfferName": {
+      "type": "string",
+      "value": "[concat('Managed by ', parameters('mspOfferName'))]"
+    },
+    "authorizations": {
+      "type": "array",
+      "value": "[parameters('authorizations')]"
+    }
+  }
+}
